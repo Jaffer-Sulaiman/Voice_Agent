@@ -1,122 +1,126 @@
-import asyncio
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
-
-
-#general imports
 import os
 from dotenv import load_dotenv
 
-# import streamlit
+import nest_asyncio
 import streamlit as st
 
-#langchain imports
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains.retrieval import create_retrieval_chain
+from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, AIMessage
-from ingest_database import vectorstore
-from langchain_core.tools import tool
-from langchain.agents import AgentExecutor , create_tool_calling_agent
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain_community.document_loaders import PyPDFDirectoryLoader
+from langchain_community.vectorstores import SupabaseVectorStore
 
+# import supabase db
+from supabase.client import Client, create_client
 
+# Apply the asyncio patch
+nest_asyncio.apply()
 
+# Load environment variables from a .env file (if it exists)
+load_dotenv()
 
-#initiate embeddings model
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.5)
-# Using the recommended embedding model for Gemini
-embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+# initiating supabase
+supabase_url = os.environ.get("SUPABASE_URL")
+supabase_key = os.environ.get("SUPABASE_SERVICE_KEY")
+supabase: Client = create_client(supabase_url, supabase_key)
 
+# --- Configuration ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# --- LangChain RAG Chain ---
-# System prompt to define the agent's persona
-SYSTEM_PROMPT = """You are a friendly and professional voice agent for Apex Builders, a construction company.
-Answer questions concisely and in a helpful tone based *only* on the provided context.
-If the context does not contain the answer, politely state that you don't have enough information.
-If a user asks to speak to a person or schedule a call, you should acknowledge their request and state that you will schedule a callback and notify the responsible person.
-Do not make up information.
+# --- Streamlit App Setup ---
+st.set_page_config(page_title="Apex Builders RAG Test", layout="centered")
+st.title("💬 Apex Builders RAG Test Agent")
+st.caption("🚀 RAG-powered conversational agent using Streamlit, LangChain, and ChromaDB.")
 
-Context:
-{context}
-"""
+# Check for API key and provide a warning if not set
+if not GEMINI_API_KEY:
+    st.error("GEMINI_API_KEY not found. Please set it in a .env file.")
+else:
+    # --- RAG Chain Initialization with Cache ---
+    @st.cache_resource
+    def initialize_rag_chain():
+        """Initializes and caches the RAG chain to avoid re-computation."""
+        try:
+            # --- LLM and Embeddings Initialization ---
+            # Explicitly pass the api_key to prevent a fallback to Application Default Credentials
+            llm = init_chat_model("gemini-2.5-flash", model_provider="google_genai")
+            embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+            
+            # initiating vector store
+            vector_store = SupabaseVectorStore(
+                embedding=embeddings,
+                client=supabase,
+                table_name="documents",
+                query_name="match_documents",
+            )
+            retriever = vector_store.as_retriever()
 
-# Define the prompt for the RAG chain
-qa_prompt = ChatPromptTemplate.from_messages([
-    ("system", SYSTEM_PROMPT),
-    MessagesPlaceholder("chat_history"),
-    ("human", "{input}"),
-])
+            # --- LangChain RAG Chain ---
+            # System prompt to define the agent's persona
+            SYSTEM_PROMPT = """You are a friendly and professional voice agent for Apex Builders, a construction company.
+            Answer questions concisely and in a helpful tone based *only* on the provided context.
+            If the context does not contain the answer, politely state that you don't have enough information.
+            If a user asks to speak to a person or schedule a call, you should acknowledge their request and state that you will schedule a callback and notify the responsible person.
+            Do not make up information.
 
+            Context:
+            {context}
+            """
 
-PERSIST_DIRECTORY = "./chroma_db"
-# Only load the existing database, never re-ingest!
-embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-vectorstore = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embeddings)
+            # Define the prompt for the RAG chain
+            qa_prompt = ChatPromptTemplate.from_messages([
+                ("system", SYSTEM_PROMPT),
+                MessagesPlaceholder("chat_history"),
+                ("human", "{input}"),
+                ("placeholder", "{agent_scratchpad}"),
+            ])
+            
+            document_chain = create_stuff_documents_chain(llm, qa_prompt)
+            retrieval_chain = create_retrieval_chain(retriever, document_chain)
+            
+            return retrieval_chain
+        
+        except Exception as e:
+            st.error(f"An error occurred during RAG chain initialization: {e}")
+            return None
 
+    # Initialize the RAG chain and check if it was successful
+    rag_chain = initialize_rag_chain()
+    
+    if rag_chain:
+        # Initialize chat history in session state
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
 
-# creating the retriever tool
-@tool(response_format="content_and_artifact")
-def retrieve(query: str):
-    """Retrieve information related to a query."""
-    retrieved_docs = vectorstore.similarity_search(query, k=2)
-    serialized = "\n\n".join(
-        (f"Source: {doc.metadata}\n" f"Content: {doc.page_content}")
-        for doc in retrieved_docs
-    )
-    return serialized, retrieved_docs
+        # Display chat messages from session state
+        for message in st.session_state.messages:
+            with st.chat_message(message["sender"]):
+                st.markdown(message["text"])
 
-# combining all tools
-tools = [retrieve]
+        # Chat input and logic
+        if prompt := st.chat_input("Ask about Apex Builders..."):
+            st.session_state.messages.append({"sender": "user", "text": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
 
-# initiating the agent
-agent = create_tool_calling_agent(llm, tools, qa_prompt)
-
-# create the agent executor
-agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
-
-# initiating streamlit app
-st.set_page_config(page_title="Agentic RAG Chatbot", page_icon="🦜")
-st.title("🦜 Agentic RAG Chatbot")
-
-# initialize chat history
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-
-# display chat messages from history on app rerun
-for message in st.session_state.messages:
-    if isinstance(message, HumanMessage):
-        with st.chat_message("user"):
-            st.markdown(message.content)
-    elif isinstance(message, AIMessage):
-        with st.chat_message("assistant"):
-            st.markdown(message.content)
-
-
-# create the bar where we can type messages
-user_question = st.chat_input("How are you?")
-
-# did the user submit a prompt?
-if user_question:
-
-    # add the message from the user (prompt) to the screen with streamlit
-    with st.chat_message("user"):
-        st.markdown(user_question)
-
-        st.session_state.messages.append(HumanMessage(user_question))
-
-
-    # invoking the agent
-    result = agent_executor.invoke({"input": user_question, "chat_history":st.session_state.messages})
-
-    ai_message = result["output"]
-
-    # adding the response from the llm to the screen (and chat)
-    with st.chat_message("assistant"):
-        st.markdown(ai_message)
-
-        st.session_state.messages.append(AIMessage(ai_message))
+            with st.chat_message("assistant"):
+                with st.spinner("Agent is typing..."):
+                    # Convert history for LangChain format
+                    chat_history_lc = []
+                    for msg in st.session_state.messages:
+                        if msg['sender'] == 'user':
+                            chat_history_lc.append(HumanMessage(content=msg['text']))
+                        else: # Assuming 'assistant' sender
+                            chat_history_lc.append(AIMessage(content=msg['text']))
+                    
+                    # Invoke the RAG chain
+                    response = rag_chain.invoke({
+                        "input": prompt,
+                        "chat_history": chat_history_lc
+                    })
+                    
+                    agent_response = response["answer"]
+                    st.markdown(agent_response)
+                    st.session_state.messages.append({"sender": "assistant", "text": agent_response})
