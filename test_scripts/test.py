@@ -3,26 +3,36 @@ from dotenv import load_dotenv
 from uuid import uuid4
 
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-from langchain_core.documents import Document
+#imports for LangChain
 from langchain_chroma import Chroma
-from chromadb.utils.embedding_functions import GoogleGenerativeAiEmbeddingFunction
-import chromadb
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.documents import Document
+import torch
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Using device: {device}")
+
+# Define the model name and keyword arguments
+model_name = "sentence-transformers/all-MiniLM-L6-v2" 
+model_kwargs = {"device": device}
+encode_kwargs = {"normalize_embeddings": True} # Normalizing all embeddings in range of 0-1
 
 CHROMA_PERSIST_DIRECTORY = "./chroma_langchain_db"
-client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIRECTORY)
 
  # create embedding function
-embedding_function = GoogleGenerativeAiEmbeddingFunction(
-        api_key=GEMINI_API_KEY
-    )
+embeddings_function = HuggingFaceEmbeddings(
+    model_name=model_name,
+    model_kwargs=model_kwargs,
+    encode_kwargs=encode_kwargs
+)
 
-# data to an existing collection.
-collection = client.get_or_create_collection(
-        name="test_collection", embedding_function=embedding_function
-    )
+vector_store = Chroma(
+    collection_name="test_collection",
+    embedding_function=embeddings_function,
+    persist_directory=CHROMA_PERSIST_DIRECTORY,
+)
+
 
 document_1 = Document(
     page_content="I had chocolate chip pancakes and scrambled eggs for breakfast this morning.",
@@ -85,16 +95,16 @@ document_10 = Document(
 )
 
 documents = [
-    document_1.page_content,
-    document_2.page_content,
-    document_3.page_content,
-    document_4.page_content,
-    document_5.page_content,
-    document_6.page_content,
-    document_7.page_content,
-    document_8.page_content,
-    document_9.page_content,
-    document_10.page_content,
+    document_1,
+    document_2,
+    document_3,
+    document_4,
+    document_5,
+    document_6,
+    document_7,
+    document_8,
+    document_9,
+    document_10,
 ]
 uuids = [str(uuid4()) for _ in range(len(documents))]
 
@@ -102,6 +112,7 @@ uuids = [str(uuid4()) for _ in range(len(documents))]
 #vectors = embeddings_model.embed_documents([doc.page_content for doc in documents])
 
 print(f"Ingesting {len(documents)} document chunks into ChromaDB...")
-collection.add(ids= uuids, documents=documents)
+vector_store.add_documents(documents=documents, ids=uuids)
+#vector_store. # Ensure data is saved to disk
 #vector_store.add_documents(documents=documents, embeddings=vectors, ids=uuids)
 print(f"Ingestion complete. Vector store saved to '{CHROMA_PERSIST_DIRECTORY}'.")
