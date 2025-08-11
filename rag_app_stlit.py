@@ -29,10 +29,6 @@ CHROMA_PERSIST_DIRECTORY = "./chroma_db"
 # --- Configuration ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# --- Streamlit App Setup ---
-st.set_page_config(page_title="Apex Builders RAG Test", layout="centered")
-st.title("💬 Construction company RAG Test Agent")
-st.caption("🚀 RAG-powered conversational agent using Streamlit, LangChain, and ChromaDB.")
 
 # Check for API key and provide a warning if not set
 if not GEMINI_API_KEY:
@@ -93,39 +89,50 @@ else:
 
     # Initialize the RAG chain and check if it was successful
     rag_chain = initialize_rag_chain()
-    
-    if rag_chain:
-        # Initialize chat history in session state
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
 
-        # Display chat messages from session state
-        for message in st.session_state.messages:
-            with st.chat_message(message["sender"]):
-                st.markdown(message["text"])
+    def main ():
+        if rag_chain:
+            
+            # --- Streamlit App Setup ---
+            st.set_page_config(page_title="Apex Builders RAG Test", layout="centered")
+            st.title("💬 Construction company RAG Test Agent")
+            st.caption("🚀 RAG-powered conversational agent using Streamlit, LangChain, and ChromaDB.")
 
-        # Chat input and logic
-        if prompt := st.chat_input("Ask about Apex Builders..."):
-            st.session_state.messages.append({"sender": "user", "text": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
+            # Initialize chat history in session state
+            if "messages" not in st.session_state:
+                st.session_state.messages = []
 
-            with st.chat_message("assistant"):
-                with st.spinner("Agent is typing..."):
-                    # Convert history for LangChain format
-                    chat_history_lc = []
-                    for msg in st.session_state.messages:
-                        if msg['sender'] == 'user':
-                            chat_history_lc.append(HumanMessage(content=msg['text']))
-                        else: # Assuming 'assistant' sender
-                            chat_history_lc.append(AIMessage(content=msg['text']))
-                    
-                    # Invoke the RAG chain
-                    response = rag_chain.invoke({
-                        "input": prompt,
-                        "chat_history": chat_history_lc
-                    })
-                    
-                    agent_response = response["answer"]
-                    st.markdown(agent_response)
-                    st.session_state.messages.append({"sender": "assistant", "text": agent_response})
+            # Display chat messages from session state
+            for message in st.session_state.messages:
+                with st.chat_message(message["sender"]):
+                    st.markdown(message["text"])
+
+            # Chat input and logic
+            if prompt := st.chat_input("Ask about Apex Builders..."):
+                st.session_state.messages.append({"sender": "user", "text": prompt})
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+
+                with st.chat_message("assistant"):
+                    with st.spinner("Agent is typing..."):
+                        # Convert history for LangChain format
+                        chat_history_lc = []
+                        for msg in st.session_state.messages:
+                            if msg['sender'] == 'user':
+                                chat_history_lc.append(HumanMessage(content=msg['text']))
+                            else: # Assuming 'assistant' sender
+                                chat_history_lc.append(AIMessage(content=msg['text']))
+                        
+                        # Invoke the RAG chain
+                        response = rag_chain.invoke({
+                            "input": prompt,
+                            "chat_history": chat_history_lc
+                        })
+                        
+                        agent_response = response["answer"]
+                        st.markdown(agent_response)
+                        st.session_state.messages.append({"sender": "assistant", "text": agent_response})
+
+
+if __name__ == "__main__":
+    main()
